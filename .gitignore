@@ -9,7 +9,7 @@ broadcast/*/*/dry-run
 contracts/root/predicates/TransferWithSigUtils.sol
 contracts/common/mixin/ChainIdMixin.sol
 test/helpers/marketplaceUtils.js
-scripts/helpers/interfaces
+tools/interfaces
 cache_hardhat/
 forge-cache/
 
@@ -28,5 +28,13 @@ coverage/
 
 coverage.json
 
-scripts/helpers/interfaces
 cache
+
+# script/pinning/verify-bytecode.sh work dir (cached on-chain code, per-solc builds, diffs)
+verify-onchain
+__pycache__/
+
+regression-replay
+.test-port
+
+.claude

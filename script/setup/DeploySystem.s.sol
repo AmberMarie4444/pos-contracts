@@ -3,7 +3,6 @@ pragma solidity ^0.8.0;
 
 // Don't import, wrong solidity version
 // import {StakeManager} from "../../contracts/staking/stakeManager/StakeManager.sol";
-// import {StakeManagerExtension} from "../../contracts/staking/stakeManager/StakeManagerExtension.sol";
 // import {StakeManagerProxy} from "../../contracts/staking/stakeManager/StakeManagerProxy.sol";
 // import {StakingNFT} from "../../contracts/staking/stakeManager/StakingNFT.sol";
 // import {ValidatorShare} from "../../contracts/staking/validatorShare/ValidatorShare.sol";
@@ -24,32 +23,35 @@ pragma solidity ^0.8.0;
 // import {StateSender} from "../../contracts/root/stateSyncer/StateSender.sol";
 
 // Interfaces
-import {StakeManager} from "../../scripts/helpers/interfaces/StakeManager.generated.sol";
-import {StakeManagerExtension} from "../../scripts/helpers/interfaces/StakeManagerExtension.generated.sol";
-import {StakeManagerProxy} from "../../scripts/helpers/interfaces/StakeManagerProxy.generated.sol";
-import {StakingNFT} from "../../scripts/helpers/interfaces/StakingNFT.generated.sol";
-import {ValidatorShare} from "../../scripts/helpers/interfaces/ValidatorShare.generated.sol";
-import {ValidatorShareFactory} from "../../scripts/helpers/interfaces/ValidatorShareFactory.generated.sol";
-import {EventsHub} from "../../scripts/helpers/interfaces/EventsHub.generated.sol";
-import {EventsHubProxy} from "../../scripts/helpers/interfaces/EventsHubProxy.generated.sol";
-import {StakingInfo} from "../../scripts/helpers/interfaces/StakingInfo.generated.sol";
+import {StakeManager} from "../../tools/interfaces/StakeManager.generated.sol";
+import {StakeManagerProxy} from "../../tools/interfaces/StakeManagerProxy.generated.sol";
+import {StakeManagerTestInit} from "../../tools/interfaces/StakeManagerTestInit.generated.sol";
+import {StakingNFT} from "../../tools/interfaces/StakingNFT.generated.sol";
+import {ValidatorShare} from "../../tools/interfaces/ValidatorShare.generated.sol";
+import {ValidatorShareFactory} from "../../tools/interfaces/ValidatorShareFactory.generated.sol";
+import {EventsHub} from "../../tools/interfaces/EventsHub.generated.sol";
+import {EventsHubProxy} from "../../tools/interfaces/EventsHubProxy.generated.sol";
+import {StakingInfo} from "../../tools/interfaces/StakingInfo.generated.sol";
 
-import {Registry} from "../../scripts/helpers/interfaces/Registry.generated.sol";
-import {Governance} from "../../scripts/helpers/interfaces/Governance.generated.sol";
-import {GovernanceProxy} from "../../scripts/helpers/interfaces/GovernanceProxy.generated.sol";
-import {PolygonMigration} from "../../scripts/helpers/interfaces/PolygonMigration.generated.sol";
-import {ERC20Permit} from "../../scripts/helpers/interfaces/ERC20Permit.generated.sol";
-import {TestToken} from "../../scripts/helpers/interfaces/TestToken.generated.sol";
+import {Registry} from "../../tools/interfaces/Registry.generated.sol";
+import {Governance} from "../../tools/interfaces/Governance.generated.sol";
+import {GovernanceProxy} from "../../tools/interfaces/GovernanceProxy.generated.sol";
+import {PolygonMigration} from "../../tools/interfaces/PolygonMigration.generated.sol";
+import {ERC20Permit} from "../../tools/interfaces/ERC20Permit.generated.sol";
+import {TestToken} from "../../tools/interfaces/TestToken.generated.sol";
 
-import {RootChain} from "../../scripts/helpers/interfaces/RootChain.generated.sol";
-import {RootChainProxy} from "../../scripts/helpers/interfaces/RootChainProxy.generated.sol";
-import {StateSender} from "../../scripts/helpers/interfaces/StateSender.generated.sol";
+import {RootChain} from "../../tools/interfaces/RootChain.generated.sol";
+import {RootChainProxy} from "../../tools/interfaces/RootChainProxy.generated.sol";
+import {StateSender} from "../../tools/interfaces/StateSender.generated.sol";
 
 import {ArtifactPath} from "./ArtifactPath.sol";
 
 import "forge-std/Script.sol";
+import {stdStorage, StdStorage} from "forge-std/StdStorage.sol";
 
 contract DeploySystem is Script, ArtifactPath {
+    using stdStorage for StdStorage;
+
     Governance governance;
     StakeManager stakeManager;
     Registry registry;
@@ -65,7 +67,6 @@ contract DeploySystem is Script, ArtifactPath {
     address governanceProxy;
     address stakingNFT;
     address validatorShareFactory;
-    address stakeManagerExtension;
 
     function run() public {}
 
@@ -108,13 +109,16 @@ contract DeploySystem is Script, ArtifactPath {
         address stakeManagerProxy = deployCode(StakeManagerProxyPath, abi.encode(address(0)));
         stakeManager = StakeManager(stakeManagerProxy);
         updateRegistryContractMap("stakeManager", address(stakeManager));
-        stakeManagerExtension = deployCode(StakeManagerExtensionPath);
 
+        // No shipped StakeManager implementation carries an initializer — the live proxy was
+        // initialized in 2020 and everything since is installed over that state. Bring the proxy up
+        // on the test-only implementation that still has one, then upgrade it away, so everything
+        // below runs against the implementation that actually deploys.
         StakeManagerProxy(payable(stakeManagerProxy))
             .updateAndCall(
-                stakeManagerImpl,
+                deployCode(StakeManagerTestInitPath),
                 abi.encodeCall(
-                    StakeManager.initialize,
+                    StakeManagerTestInit.initialize,
                     (
                         address(registry),
                         address(rootChain),
@@ -124,12 +128,13 @@ contract DeploySystem is Script, ArtifactPath {
                         validatorShareFactory,
                         governanceProxy,
                         owner,
-                        stakeManagerExtension,
                         address(polToken),
                         address(polygonMigration)
                     )
                 )
             );
+
+        StakeManagerProxy(payable(stakeManagerProxy)).updateImplementation(stakeManagerImpl);
 
         StakingNFT(stakingNFT).transferOwnership(address(stakeManager));
 
@@ -234,10 +239,10 @@ contract DeploySystem is Script, ArtifactPath {
         fundAddr(_from, _amount);
 
         vm.prank(_from);
-        polToken.approve(address(validatorShare), _amount);
+        polToken.approve(address(stakeManager), _amount);
 
         vm.prank(_from);
-        validatorShare.buyVoucher(_amount, _amount);
+        validatorShare.buyVoucherPOL(_amount, 0);
     }
 
     function buyVouchersPOLPermit(uint8 _validatorId, address _from, uint256 _pk, uint256 _amount) public {
@@ -278,7 +283,7 @@ contract DeploySystem is Script, ArtifactPath {
         ValidatorShare validatorShare = getValidatorShareContract(_validatorId);
 
         vm.prank(_from);
-        validatorShare.sellVoucher_newPOL(_amount, 0);
+        validatorShare.sellVoucher_newPOL(_amount, type(uint256).max);
 
         return validatorShare.unbondNonces(_from);
     }
@@ -292,6 +297,12 @@ contract DeploySystem is Script, ArtifactPath {
 
     function getValidatorShareContract(uint8 _validatorId) public view returns (ValidatorShare) {
         return ValidatorShare(stakeManager.getValidatorContract(_validatorId));
+    }
+
+    /// @dev Fast-forward the StakeManager's epoch counter by writing it directly. Tests that only
+    ///      need the withdrawal delay behind them shouldn't have to mine a checkpoint per epoch.
+    function setStakeManagerEpoch(uint256 _epoch) public {
+        stdstore.target(address(stakeManager)).sig(StakeManager.currentEpoch.selector).checked_write(_epoch);
     }
 
     function progressCheckpointWithRewards(Validator[] memory _validators, address _proposer) public returns (uint256) {
